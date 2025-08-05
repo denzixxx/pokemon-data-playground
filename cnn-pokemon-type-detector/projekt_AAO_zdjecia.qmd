@@ -1,0 +1,346 @@
+---
+title: "Projekt z przedmiotu Automatyczna Analiza obrazu"
+author: 
+  - "Martyna Bajkowska"
+  - "Anna Kaczmarek"
+format: 
+  html:
+    warning: false
+    message: false
+    #echo: false
+    self-contained: true
+    self-contained-math: true
+    html-math-method: katex
+    toc: true
+    toc-title: Spis treści
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r echo = F}
+library("tidyverse")
+library("tensorflow")
+library("keras")
+library(gt)
+```
+
+![](C:/Users/annak/OneDrive/Pulpit/pokemon.png){fig-align="center"}
+
+Celem projektu jest budowa sieci potrafiącej na podstawie zdjęć pokemonów przwidzieć typ ich ataku. Wygląd pokemonów jest jednym z kluczowych czynników, które przyciągają uwagę miłośników kreskówki. Zastosowanie uczenia maszynowego i technik analizy obrazu do identyfikacji typu pokemonów na podstawie ich wyglądu może być fascynującym wyzwaniem i interesującym projektem, ponieważ pokemony to niezwykle zróżnicowana grupa stworzeń, które występują w wielu różnych kształtach, rozmiarach i kolorach. Różnorodność wyglądu pokemonów tego samego typu jest spowodowana zarówno różnicami genetycznymi, jak i różnymi środowiskami, w których żyją, co może wprowadzać pewne trudności w dokładnej predykcji. Istnieje wiele wyjątków, gdy dwa pokemony tego samego typu mogą różnić się wyglądem z powodu czynników takich jak ewolucja, różnice regionalne lub warianty kolorystyczne.
+
+Zbiór, który bedziemy wykorzystywać pochodzi z witryny [kaggle](https://www.kaggle.com/datasets/vishalsubbiah/pokemon-images-and-types) i zawiera podpisane zdjęcia 809 pokemonów. Dodatkowo mamy plik csv zawierający nazwę oraz typ ataku każdego z nich i będzie to nasza zmienna wynikowa.
+
+Wyświetlimy kilka wierszy zbioru.
+
+```{r echo = F}
+df <- read.csv("C:/Users/annak/OneDrive/Pulpit/VI SEMESTR/AUTOMATYCZNA ANALIZA OBRAZU/pokemon.csv", 
+                 sep = ',', header = T, encoding = 'UTF-8')
+df2 <- df |> 
+  arrange(Name)
+head(df[, -3], 10) |> 
+  gt() |> 
+  cols_label(Name = "Name",
+             Type1 = "Type")
+```
+
+Narysujemy kilka oraz wyświetlimy jak prezentuje się rozkład w zależności od ich typu, czyli jak dużo jest każdego rodzaju pokemonów.
+
+```{r echo = F}
+
+img1 <- magick::image_read("C:/Users/annak/OneDrive/Pulpit/VI SEMESTR/AUTOMATYCZNA ANALIZA OBRAZU/images/kadabra.png")
+img2 <- magick::image_read("C:/Users/annak/OneDrive/Pulpit/VI SEMESTR/AUTOMATYCZNA ANALIZA OBRAZU/images/mew.png")
+img3 <- magick::image_read("C:/Users/annak/OneDrive/Pulpit/VI SEMESTR/AUTOMATYCZNA ANALIZA OBRAZU/images/hawlucha.png")
+img4 <- magick::image_read("C:/Users/annak/OneDrive/Pulpit/VI SEMESTR/AUTOMATYCZNA ANALIZA OBRAZU/images/growlithe.png")
+
+img1 <- magick::image_resize(img1, "300x")
+img2 <- magick::image_resize(img2, "300x")
+img3 <- magick::image_resize(img3, "300x")
+img4 <- magick::image_resize(img4, "300x")
+zdj <- c(img1, img2, img3, img4)
+
+par(mfrow = c(2, 2), mar = c(0, 0, 0, 0))
+for(i in 1:4){
+    img = zdj[i]
+    plot(as.raster(img))
+}
+```
+
+```{r echo = F}
+library(plotly)
+library(gridExtra)
+
+pokemons <- df2
+pokemons.pom <- pokemons |> 
+  drop_na()
+
+color <- c("#6F35FC","#B7B7CE","#A98FF3","#F95587","#B6A136","#EE8130","#F7D02C","#705746","#735797","#E2BF65","#96D9D6","#6390F0","#7AC74C","#C22E28","#D685AD","#A33EA1","#A8A77A","#A6B91A")
+Type.1 <- c("Dragon","Steel","Flying","Psychic","Rock" ,"Fire","Electric" ,"Dark","Ghost" ,"Ground","Ice", "Water","Grass","Fighting", "Fairy" ,"Poison","Normal","Bug")
+COL <- data.frame(Type.1,color)
+merge(pokemons |> 
+          group_by(Type1) |> 
+          summarize(tot = n()),
+        pokemons |> 
+          group_by(Type1) |> 
+          summarize(count = n()), by = 'Type1') |>
+  ggplot(aes(x = reorder(Type1, tot), y = count)) + 
+  geom_bar(aes(fill = color), color = 'white', size = .25, stat = 'identity') + 
+  scale_fill_identity() + 
+  coord_flip() + 
+  #ggthemes::theme_fivethirtyeight() + 
+  ggtitle("Liczba pokemonów w zależności od typu") + 
+  labs(x ="Typ pokemona", y = "Liczbność")
+```
+
+Wszystkich typów jest 18 jednak jak widzimy nasz zbiór jest bardzo mocno niezbalansowany, wodnych pokemonów w porównaniu do latających jest aż 38 razy więcej. Z tego też powodu usuniemy najpierw dwie najmniej liczne kategorie `flying` oraz `fairy` i będziemy zajmować się szesnastoma.
+
+# Przygotowanie danych
+
+Zanim przejdziemy do budowy modelu musimy prygotować nasze dane, w tym celu stworzymy jedną tabele zawierającą ścieżke do zdjęcia każdego pokemona, odpowiedni type jego ataku, a dodatkowo zrobimy kolumne `code` zawierającą typ ataku, ale jako zmienna numeryczna.
+
+```{r echo = F}
+library(jpeg)
+
+path <- "C:/Users/annak/OneDrive/Pulpit/VI SEMESTR/AUTOMATYCZNA ANALIZA OBRAZU/images/"
+
+img_name <- sort(list.files("C:/Users/annak/OneDrive/Pulpit/VI SEMESTR/AUTOMATYCZNA ANALIZA OBRAZU/images/"))
+img_paths <- vector()
+
+for (i in img_name) {
+  img_paths <- c(img_paths, paste0(path, i))
+}
+df2$filepath <- img_paths
+#str(df2)
+```
+
+```{r echo = F}
+poke_type <- vector()
+code <- vector()
+
+for (i in 1:nrow(df2)) {
+    if (df2[i, 'Type1'] == 'Grass' || df2[i, 'Type2'] == 'Grass') {
+        poke_type <- c(poke_type, 'Grass')
+        code <- c(code, 1)
+    } else if (df2[i, 'Type1'] == 'Water' || df2[i, 'Type2'] == 'Water') {
+        poke_type <- c(poke_type, 'Water')
+        code <- c(code, 2)
+    } else if (df2[i, 'Type1'] == 'Normal' || df2[i, 'Type2'] == 'Normal') {
+        poke_type <- c(poke_type, 'Normal')
+        code <- c(code, 3)
+    } else if (df2[i, 'Type1'] == 'Bug' || df2[i, 'Type2'] == 'Bug') {
+        poke_type <- c(poke_type, 'Bug')
+        code <- c(code, 4)
+    } else if (df2[i, 'Type1'] == 'Psychic' || df2[i, 'Type2'] == 'Psychic') {
+        poke_type <- c(poke_type, 'Psychic')
+        code <- c(code, 5)
+    } else if (df2[i, 'Type1'] == 'Fire' || df2[i, 'Type2'] == 'Fire') {
+        poke_type <- c(poke_type, 'Fire')
+        code <- c(code, 6)
+    } else if (df2[i, 'Type1'] == 'Rock' || df2[i, 'Type2'] == 'Rock') {
+        poke_type <- c(poke_type, 'Rock')
+        code <- c(code, 7)
+    } else if (df2[i, 'Type1'] == 'Electric' || df2[i, 'Type2'] == 'Electric') {
+        poke_type <- c(poke_type, 'Electric')
+        code <- c(code, 8)
+    } else if (df2[i, 'Type1'] == 'Poison' || df2[i, 'Type2'] == 'Poison') {
+        poke_type <- c(poke_type, 'Poison')
+        code <- c(code, 9)
+    } else if (df2[i, 'Type1'] == 'Ground' || df2[i, 'Type2'] == 'Ground') {
+        poke_type <- c(poke_type, 'Ground')
+        code <- c(code, 10)
+    } else if (df2[i, 'Type1'] == 'Fighting' || df2[i, 'Type2'] == 'Fighting') {
+        poke_type <- c(poke_type, 'Fighting')
+        code <- c(code, 11)
+    } else if (df2[i, 'Type1'] == 'Dark' || df2[i, 'Type2'] == 'Dark') {
+        poke_type <- c(poke_type, 'Dark')
+        code <- c(code, 12)
+    } else if (df2[1, 'Type1'] == 'Ghost' || df2[i, 'Type2'] == 'Ghost') {
+        poke_type <- c(poke_type, 'Ghost')
+        code <- c(code, 13)
+    } else if (df2[i, 'Type1'] == 'Dragon' || df2[i, 'Type2'] == 'Dragon') {
+        poke_type <- c(poke_type, 'Dragon')
+        code <- c(code, 14)
+    } else if (df2[i, 'Type1'] == 'Steel' || df2[i, 'Type2'] == 'Steel') {
+        poke_type <- c(poke_type, 'Steel')
+        code <- c(code, 15)
+    } else if (df2[i, 'Type1'] == 'Ice' || df2[i, 'Type2'] == 'Ice') {
+        poke_type <- c(poke_type, 'Ice')
+        code <- c(code, 16)
+    } else {
+        poke_type <- c(poke_type, 'NaN')
+        code <- c(code, 'NaN')
+    }
+}
+```
+
+```{r echo = F}
+df2$type <- poke_type
+df2$code <- code
+new_df <- df2[, !(names(df2) %in% c('Type1', 'Type2', 'Name'))]
+new_df <- new_df[new_df$type != 'NaN', ]
+new_df <- new_df[order(row.names(new_df)), ]
+row.names(new_df) <- NULL
+
+head(new_df, 10) |> 
+  gt()
+```
+
+# Podział na zbiory oraz przygotowanie obrazów
+
+Cały nasz zbiór zostanie podzielony na zbiór uczący, testowy oraz walidacyjny w proporcjach $0.8:0.14:0.06$. Wyświetlmy sobie rozkład typów idących do treningu oraz przykładowe zdjęcia. Nie zostanie tu zastosowany żaden rodzaj przekształceń, sprawdzimy jak zadziała sieć jedynie na oryginalnych zdjęciach.
+
+```{r echo = F}
+set.seed(2029)
+library(rsample)
+split <- initial_split(new_df,
+                       prop = 0.8)
+train_df <- training(split)
+test_df <- testing(split)
+
+split2 <- initial_split(test_df,
+                       prop = 0.7)
+test_df <- training(split2)
+val_df <- testing(split2)
+```
+
+```{r echo = F}
+library(ggplot2)
+
+ggplot(new_df, aes(x = type)) +
+  geom_bar() +
+  labs(title = "Pokemony w zbiorze treningowym", y = "Liczba")
+
+```
+
+```{r echo = F}
+train_datagen <- image_data_generator(rescale = 1/255)
+
+train_generator <- flow_images_from_dataframe(
+  dataframe = train_df,
+  x_col = "filepath",
+  y_col = "type",
+  generator = train_datagen,
+  target_size = c(120, 120),
+  color_mode = "rgba",
+  class_mode = "categorical",
+  batch_size = 32,
+  shuffle = TRUE,
+  seed = 1
+)
+
+validation_datagen <- image_data_generator(rescale = 1/255)
+
+validation_generator <- flow_images_from_dataframe(
+  dataframe = val_df,
+  x_col = "filepath",
+  y_col = "type",
+  generator = validation_datagen,  
+  target_size = c(120, 120),
+  color_mode = "rgba",
+  class_mode = "categorical",
+  batch_size = 32,
+  shuffle = TRUE,
+  seed = 1
+)
+```
+
+```{r echo = F}
+#str(train_generator[[1]])
+
+par(mfrow = c(3, 4), mar = c(0, 0, 0, 0))
+for(i in 1:12){
+    img = train_generator[[1]][[1]][i, , , ]
+    plot(as.raster(img))
+}
+```
+
+# Budowa modelu
+
+Poniżej widzimy strukturę sieci. Składa się ona z czterech rozszerzających się warstw konwolucyjnych, trzech max_pooling oraz dwóch gęstych. Liczba całkowita parametrów wynosi $13,179,088$.
+
+```{r echo = F}
+model <- keras_model_sequential() |>
+  #layer_dense(units = 4, input_shape = c(120, 120, 4))|>
+  layer_conv_2d(filters = 64, input_shape = c(120, 120, 4), kernel_size = c(7, 7), activation = "relu") |>
+  layer_max_pooling_2d(pool_size = c(2, 2)) |>
+  layer_conv_2d(filters = 128, kernel_size = c(7, 7), activation = "relu") |>
+  layer_max_pooling_2d(pool_size = c(2, 2)) |>
+  layer_conv_2d(filters = 256, kernel_size = c(7, 7), activation = "relu") |>
+  layer_max_pooling_2d(pool_size = c(2, 2)) |>
+  layer_conv_2d(filters = 512, kernel_size = c(7, 7), activation = "relu") |>
+  layer_flatten() |>
+  layer_dense(units = 1024, activation = "relu") |>
+  layer_dense(units = 16, activation = "softmax")
+
+# model
+summary(model)
+
+library(deepviz)
+library(magrittr)
+
+model |> 
+  plot_model()
+```
+
+```{r}
+# data_augmentation <- keras_model_sequential()
+# 
+# inputs <- layer_input(shape = c(120, 120, 4))
+# 
+# x <- inputs |>
+#   data_augmentation()
+# 
+# x <- x |>
+#   layer_conv_2d(32, 5, use_bias = FALSE)
+# 
+# for (size in c(32, 64, 128, 256)) {
+#   residual <- x
+# 
+#   x <- x |>
+#     layer_batch_normalization() |>
+#     layer_activation("relu") |>
+#     layer_separable_conv_2d(size, 5, padding = "same", use_bias = FALSE) |>
+#     layer_batch_normalization() |>
+#     layer_activation("relu") |>
+#     layer_separable_conv_2d(size, 5, padding = "same", use_bias = FALSE) |>
+#     layer_max_pooling_2d(pool_size = 5, strides = 2, padding = "same") |> 
+#     layer_dropout(0.2)
+# 
+#   residual <- residual |>
+#     layer_conv_2d(size, 1, strides = 2, padding = "same", use_bias = FALSE)
+# 
+#   x <- layer_add(list(x, residual))
+# }
+# 
+# outputs <- x |>
+#   layer_global_average_pooling_2d() |>
+#   layer_dropout(0.5) |>
+#   layer_dense(3, activation = "softmax")
+# 
+# model <- keras_model(inputs, outputs)
+# 
+# #callbacks <- list(callback_model_checkpoint(filepath = "models/vgg16_cat_dog.keras", save_best_only = T))
+# 
+# model |> 
+#   compile(optimizer = "adam",
+#           loss = "categorical_crossentropy",
+#           metrics = c("accuracy"))
+# 
+# history <- model |> 
+#   fit(
+#       train_generator, 
+#       validation_data = validation_generator,
+#       epochs = 20, 
+#       batch_size = 20)
+# 
+# plot(history)
+# summary(model)
+```
+
+Tutaj już widać znaczną poprawę w stosunku do poprzednich sieci, oczywiście można byłoby dodać bardziej zaawansowane techniki aby jeszcze poprawić trafność klasyfikacji, jednak trzeba również wziąć pod uwagę zróżnicowanie pokemonów. Ponieważ, jest niezwykle zróżnicowana grupa stworzeń, które występują w wielu różnych kształtach, rozmiarach i kolorach, więc nawet w obrębie tego samego typu można zaobserwować znaczną różnorodność pod względem wyglądu. Różnorodność wyglądu pokemonów tego samego typu jest spowodowana zarówno różnicami genetycznymi, jak i różnymi środowiskami, w których żyją.
+
+![](C:/Users/annak/OneDrive/Pulpit/pokemon2.png){fig-align="center"}
+
+```{r}
+
+```

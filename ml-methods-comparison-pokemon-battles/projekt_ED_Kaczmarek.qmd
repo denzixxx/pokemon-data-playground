@@ -1,0 +1,755 @@
+---
+title: "Projekt z przedmiotu Eksploracja Danych"
+author: "Anna Kaczmarek"
+format: 
+  html:
+    warning: false
+    message: false
+    #echo: false
+    self-contained: true
+    self-contained-math: true
+    html-math-method: katex
+    toc: true
+    toc-title: Spis treści
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r echo = F}
+library(tidyverse)
+```
+
+![](C:/Users/annak/OneDrive/Pulpit/pokemon.jpg){fig-align="center"}
+
+Celem projektu jest bazując na zbiorze danych dotyczącym Pokemonów budowa modeli klasyfikacyjnych przewidujących wynik walki między dwoma pokemonami.
+
+Zbiór pierwszy `pokemons` zawiera spis pokemonów oraz ich dodatkowe paramatery i atrybuty takie jak:
+
+-   `Type.1` - typ/rodzaj ataku pokemona
+
+-   `Type.2` - dodatkowy typ/rodzaj ataku pokemona (nie każdy go posiada)
+
+-   `HP` - punkty życia
+
+-   `Attack` - siła ataku
+
+-   `Defense` - siła obrony
+
+-   `Sp. Atk` - siła specjalnego ataku
+
+-   `Sp. Def` - siła specjalnej obrony
+
+-   `Speed` - prędkość
+
+-   `Generation` - generacja
+
+-   `Legendary` - czy jest legendarny
+
+Oraz drugi zbiór zawierający odbyte już walki między Pokemonami. Składa się on z
+
+-   `First_pokemon` - id pokemona, który brał udział w bitwie i pierwszy atakował
+
+-   `Secodn_pokemon` - id pokemona który brał udział w bitwie
+
+-   `Winner` - id pokemona, który zwyciężył pojedynek
+
+Poniżej zostaną wyświetlone oba zbiory.
+
+```{r echo = FALSE}
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(kableExtra)
+library(ggplot2)
+
+combats <- read.csv("C:/Users/annak/OneDrive/Pulpit/VI SEMESTR/EKSPLORACJA DANYCH/combats.csv", sep = ',', header = T, encoding = 'UTF-8')
+
+pokemons <- read.csv("C:/Users/annak/OneDrive/Pulpit/VI SEMESTR/EKSPLORACJA DANYCH/pokemon.csv", sep = ',', header = T, encoding = 'UTF-8', na.strings = c(""))
+colnames(pokemons)[1] <- "Number"
+
+prediction_df <- read.csv("C:/Users/annak/OneDrive/Pulpit/VI SEMESTR/EKSPLORACJA DANYCH/tests.csv", sep = ',', header = T, encoding = 'UTF-8')
+
+```
+
+```{r echo = F}
+kbl(head(pokemons, 10), caption = "<center><strong>Zbiór pokemonów</strong></center>") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+kbl(head(combats, 10), caption = "<center><strong>Odbyte walki</strong></center>") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+# Przygotowanie zbioru
+
+## Braki danych
+
+Przed przystąpieniem do dalszej analizy oraz budowy modeli zbiory zostaną przejrzane i odpowiednio przygotowane.
+
+Zostało znalezione 387 brakujących wartości, większość z nich jest w zmiennej `Type.2`. Jest to spowodowane tym iż nie każdy pokemon posiada drugi typ ataku, nie będziemy tego zmieniać.
+
+Występuje również jeden brak w nazwie pokemona z numerem 63, zakładając że numery pokemonów są zgodne z National Pokedox Number, możemy znaleźć odpowiednią nazwę [tutaj](https://pokemondb.net/pokedex/all) i uzupełnić ją ręcznie.
+
+```{r include = F}
+sum(is.na(pokemons))
+sum(is.na(combats))
+```
+
+```{r echo = FALSE}
+
+kbl(pokemons[!complete.cases(pokemons$Name), ]) |> 
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+pokemons$Name[63] <- "Primeape"
+```
+
+# Analiza zbioru
+
+Poprzez zbiór walk obliczymy jaki procent odbytych walk każdy z pokemonów wygrał. Aby to zrobić zliczymy ile razy każdy z nich walczył oraz ile razy odniósł zwycięstwo.
+
+```{r echo = F}
+total.wins <- combats$Winner |> # ile razy kazdy pokemon wygral
+  table() |> 
+  as.data.frame()
+colnames(total.wins) <- c("Number", "number.of.wins")
+
+```
+
+```{r include = F}
+countByFirst <- combats$First_pokemon |> 
+  table() |> 
+  as.data.frame()
+colnames(countByFirst) <- c("Number", "win1")
+
+countBySecond <- combats$Second_pokemon |> 
+  table() |> 
+  as.data.frame()
+colnames(countBySecond) <- c("Number", "win2")
+```
+
+```{r include = F}
+totalFights <- cbind(countByFirst, countBySecond)
+totalFights <- totalFights[, -3] |> 
+  mutate(total.fights = win1 + win2)
+totalFights <- totalFights[, -c(2,3)] # ile razy kazdy pokemon walczyl
+```
+
+```{r include = F}
+colnames(pokemons)
+result <- merge(pokemons, totalFights, by = "Number", all.x = TRUE)
+result <- merge(result, total.wins, by = "Number", all.x = TRUE)
+#View(result)
+result <- result |> 
+  mutate(win.percentage = round(number.of.wins/total.fights, 4))
+
+not.fight <- result[!complete.cases(result$win.percentage), ] # pokemony ktore nie walczyły ani razu
+
+```
+
+```{r echo = F}
+kbl(head(result[, c(2, 15)]), caption = "<center><strong>Procent wygranych pojedynków</strong></center>") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+Przykładowo `Bulbasaur` wygrał 27% wszystkich swoich walk, a `Charmeleon` 54%.
+
+## Pokemony, które nie walczyły
+
+Zauważmy, że dla części pokemonów występują wartości Na, oznacza to, że nie stoczyły one żadnego pojedynku.
+
+```{r echo = F}
+kbl(head(not.fight[, c(2, 15)], 7), caption = "<center><strong>Pokemony, ktore nie walczyły ani razu</strong></center>", row.names = F) |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Top 10 najsłabszych
+
+Teraz sprawdźmy jeszcze, które pokemony wygrały najmniej oraz najwięcej ze swoich walk.
+
+```{r echo = F}
+kbl(head(result[order(result$win.percentage), -c(13, 14)], 10), caption = "<center><strong> </strong></center>", row.names = F) |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Top 10 najmocniejszych
+
+```{r echo = F}
+kbl(head(result[order(result$win.percentage, decreasing = T), -c(13, 14)], 10), caption = "<center><strong> </strong></center>", row.names = F) |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+Jeżeli spojrzymy na statystyki widzimy wyraźną różnicę między pokemonami, które wygrywają, a tymi które przegrywają. Poziom parametrów takich jak `Attack` oraz `Speed` są zdecydowanie wyższe u wygrywających pokemonów, wieć to pewnie one odgrywają istotną rolę.
+
+# Podstawowe statystyki
+
+Zobaczmy jak prezentują się podstawowe statystyki naszego zbioru, możemy zobaczyć zmienne takie jak min, max, średnią. Dzięki niej możemy lepiej zrozumieć nasze dane np. że średnio każdy pokemon walczył 128 razy, a wygrał 68 razy. Jak również ile przeciętnie wynosi atak albo obrona, i jak to wypada w porównaniu do najsłabszego/najmocniejszego pokemona.
+
+```{r echo = F}
+df <- na.omit(result, cols = c("total.fights", "number.of.wins", "win.percentage"))
+df <- df |> 
+  select(5:11, 13, 14, 15)
+
+st_op <- apply(df, 2, summary)
+st_op <- rbind(st_op, St.dev = apply(df, 2, sd))
+st_op <- as.data.frame(round(st_op, 2))
+
+kbl(st_op, caption = "<center><strong>PODSTAWOWE STATYSTYKI OPISOWE</strong></center>") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+# Wizualizacja danych
+
+Przedstawimy nasze zbiory na wykresach, dzięki czemu może będziemy mogli zaobserwować pewne zależności.
+
+## Rozkład typów pokemonów
+
+Najpierw sprawdźmy jak prezentuje się liczba pokemonów w zależności od ich typu, tzn. jak dużo jest każdego typu pokemonów.
+
+```{r echo = F}
+library(plotly)
+library(gridExtra)
+
+pokemons.pom <- pokemons |> 
+  drop_na()
+
+color <- c("#6F35FC","#B7B7CE","#A98FF3","#F95587","#B6A136","#EE8130","#F7D02C","#705746","#735797","#E2BF65","#96D9D6","#6390F0","#7AC74C","#C22E28","#D685AD","#A33EA1","#A8A77A","#A6B91A")
+Type.1 <- c("Dragon","Steel","Flying","Psychic","Rock" ,"Fire","Electric" ,"Dark","Ghost" ,"Ground","Ice", "Water","Grass","Fighting", "Fairy" ,"Poison","Normal","Bug")
+COL <- data.frame(Type.1,color)
+merge(
+  merge(pokemons %>% 
+          group_by(Type.1) %>% 
+          summarize(tot = n()),
+        pokemons %>% 
+          group_by(Type.1,Legendary) %>% 
+          summarize(count=n()), by = 'Type.1'),
+  COL, by = 'Type.1') %>% 
+  ggplot(aes(x = reorder(Type.1, tot), y = count)) + 
+  geom_bar(aes(fill = color, alpha = Legendary), color = 'white', size = .25, stat = 'identity') + 
+  scale_fill_identity() + 
+  coord_flip() + 
+  #ggthemes::theme_fivethirtyeight() + 
+  ggtitle("Liczba pokemonów w zależności od typu") + 
+  scale_alpha_discrete(range = c(.9,.6))+
+  labs(x ="Typ pokemona", y = "Liczbność")
+
+# plot1 <- ggplot(pokemons.pom, aes(x = Type.1, fill = Legendary))+
+#   geom_bar(width =.5, position = "dodge", show.legend = FALSE)
+# 
+# plot2 <- ggplot(pokemons.pom, aes(x = Type.2, fill = Legendary))+
+#   geom_bar(width=.5, position = "dodge")
+# grid.arrange(plot1, plot2, ncol = 2)
+```
+
+```{r include = FALSE}
+# plot_ly(pokemons.pom, x = ~Type.2, type = "bar") |> 
+#   layout(xaxis = list(categoryorder = "total descending"))
+# plot_ly(pokemons.pom, x = ~Type.1, color = ~Legendary) |> 
+#   add_histogram()
+# plot_ly(pokemons.pom, x = ~Type.2, color = ~Legendary) |> 
+#   add_histogram()
+```
+
+Widzimy, że `wodny`, `normalny`, `robaczy` i `trawiasty` są najczęściej występujące w `Typ 1`, a najmniej jest latających.
+
+Spójrzmy jeszcze jak wygląda procent wygranych walk, jednak nie w podziale na każdego pokemona oddzielnie, ale ze względu na ich typ.
+
+```{r echo = F}
+result.pom <- na.omit(result, cols = c("win.percentage"))
+result.pom2 <- result.pom |> 
+  group_by(Type.1) |> 
+  summarise(srednio = mean(win.percentage))
+
+kbl(head(result.pom2[order(-result.pom2$srednio), ], 5), caption = "<center><strong>Procent wygranych walk w zależności od typu</strong></center>") |> 
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+kbl(tail(result.pom2[order(-result.pom2$srednio), ], 5), col.names = NULL) |> 
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+`Smoczy` jest na prowadzeniu, a za nim `elektryczny` oraz `walczący`, najsłabiej wypada `bajkowy`.
+
+## Wykresy zależności między atakiem/ obroną a procentem wygranych walk.
+
+```{r echo = F}
+plot1 <- ggplot(data = result.pom, aes(x = Attack, y = win.percentage)) +
+  geom_point() +
+  geom_smooth()+
+  labs(x = "attack", y = "win percentage", title = "Attack vs Win Percentage")
+
+plot2 <- ggplot(data = result.pom, aes(x = Defense, y = win.percentage)) +
+  geom_point() +
+  geom_smooth()+
+  labs(x = "defense", y = "win percentage", title = "Defense vs Win Percentage")
+
+grid.arrange(plot1, plot2, ncol = 2)
+```
+
+Co ciekawe mocna obrona nie zagwarantuje nam wygranej, wręcz przeciwnie do pewnego momentu jest zależność jest rosnąca, jedna potem drastycznie spada. Ale jak popatrzymy na szybkość, ma ona bardzo duży wpływ na wygraną. Także więc mocny atak i szybkość są kluczowe. Nawet jak popatrzymy na wcześnieją tabele pokemonów najczęściej wygrywających praktycnzie wszystkie mają wartości w ataku oraz szybkości powyżej 100.
+
+```{r echo = F}
+ggplot(data = result.pom, aes(x = Speed, y = win.percentage)) +
+  geom_point() +
+  geom_smooth()+
+  labs(x = "speed", y = "win percentage", title = "Speed vs Win Percentage")
+```
+
+Poziom szybkości ma istotny wpływ na wyniki walk: Im wyższy tym większa szansa na zwycięstwo inaczej mówiąc wartość procentu wygranych walk rośnie wraz ze wzrostem szybkości.
+
+Niemniej jednak pomimo istotności ataku i szybkości, nie są to jedyne czynnik decydujący o wynikach walk. Inne czynniki, typ, punkty życia czy umiejętności specjalne również mogą mieć wpływ na wyniki walk. Dlatego nawet przy wysokim poziomie ataku nadal istnieje pewne rozproszenie w procentach wygranych walk.
+
+# Machine learning
+
+Bedziemy budować modele, które na podstawie statystyk walczących ze sobą pokemonów będą przewidywać, który z nich wygra.
+
+Zanim przejdziemy do budowy modeli przygotujemy nasze dane.
+
+## Preprocessing
+
+W jednej ramce danych umieścimy statystyki obu walczących pokemonów oraz obliczymy óżnice między ich parametrami, na tej podstawie będziemy budować modele.
+
+Zmienna wynikowa "`win/loss`" oraz `generacja` pokemonów będą zmiennymi typu factor.
+
+Ponieżej widzimy przygotowaną tabelę.
+
+```{r echo = F}
+pokefight <- combats
+pokemon <- pokemons
+
+pokefight$ID_1 <- (combats$First_pokemon)
+pokefight$Type1_1 <- pokemon$Type.1[combats$First_pokemon]
+pokefight$Type2_1 <- pokemon$Type.2[combats$First_pokemon]
+pokefight$HP_1 <- pokemon$HP[combats$First_pokemon]
+pokefight$Attack_1 <- pokemon$Attack[combats$First_pokemon]
+pokefight$Defense_1 <- pokemon$Defense[combats$First_pokemon]
+pokefight$Sp..Atk_1 <- pokemon$Sp..Atk[combats$First_pokemon]
+pokefight$Sp..Def_1 <- pokemon$Sp..Def[combats$First_pokemon]
+pokefight$Speed_1 <- pokemon$Speed[combats$First_pokemon]
+pokefight$Generation_1 <- pokemon$Generation[combats$First_pokemon]
+pokefight$Legendary_1 <- pokemon$Legendary[combats$First_pokemon]
+
+pokefight$ID_2 <- (combats$Second_pokemon)
+pokefight$Type1_2 <- pokemon$Type.1[combats$Second_pokemon]
+pokefight$Type2_2 <- pokemon$Type.2[combats$Second_pokemon]
+pokefight$HP_2 <- pokemon$HP[combats$Second_pokemon]
+pokefight$Attack_2 <- pokemon$Attack[combats$Second_pokemon]
+pokefight$Defense_2 <- pokemon$Defense[combats$Second_pokemon]
+pokefight$Sp..Atk_2 <- pokemon$Sp..Atk[combats$Second_pokemon]
+pokefight$Sp..Def_2 <- pokemon$Sp..Def[combats$Second_pokemon]
+pokefight$Speed_2 <- pokemon$Speed[combats$Second_pokemon]
+pokefight$Generation_2 <- pokemon$Generation[combats$Second_pokemon]
+pokefight$Legendary_2 <- pokemon$Legendary[combats$Second_pokemon]
+pokefight$Result[pokefight$Winner == pokefight$First_pokemon] <- 'Win'
+pokefight$Result[pokefight$Winner == pokefight$Second_pokemon] <- 'Loss'
+
+pokefight$Result <- as.factor(pokefight$Result)
+pokefight$Generation_1 <- as.factor(pokefight$Generation_1)
+pokefight$Generation_2 <- as.factor(pokefight$Generation_2)
+
+# ______________________________________________________________
+
+# Create 'difference' features
+pokefight$diff_HP = pokefight$HP_1 - pokefight$HP_2
+pokefight$diff_Attack = pokefight$Attack_1 - pokefight$Attack_2
+pokefight$diff_Defense = pokefight$Defense_1 - pokefight$Defense_2
+pokefight$diff_Sp..Atk = pokefight$Sp..Atk_1 - pokefight$Sp..Atk_2
+pokefight$diff_Sp..Def = pokefight$Sp..Def_1 - pokefight$Sp..Def_2
+pokefight$diff_Speed = pokefight$Speed_1 - pokefight$Speed_2
+
+# Create binary variable of Result ('Win/Lose' to numeric variable '1/0')
+#pokefight$binaryResult[pokefight$Result == "Win"] <- 1
+#pokefight$binaryResult[pokefight$Result == "Loss"] <- 0
+
+# Create dataframe which only consist of numeric features
+numeric_metrics <- pokefight[ ,c('Result', 'diff_HP', 'diff_Attack', 'diff_Defense', 'diff_Sp..Atk', 'diff_Sp..Def', 'diff_Speed', 'HP_1', 'Attack_1', 'Defense_1', 'Sp..Atk_1', 'Sp..Def_1', 'Speed_1')]
+
+# ___________________
+
+kbl(head(pokefight, 5), caption = "<center><strong>Procent wygranych walk w zależności od typu</strong></center>") |> 
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Podział zbioru
+
+Zbiór zostanie podzielony na zbiory treningowy o raz testowy w proporcji 80/20, a za kontrole uczenia będzie odpowiadać 5-krotna walidacja krzyżowa.
+
+```{r echo = F}
+#result$winner_first_label <- 
+#  ifelse(combats$Winner == combats$First_pokemon, 'yes', 'no')
+data <- pokefight |> # [, -c(3, 4, 15)]  
+  na.omit() 
+
+
+#colnames(test_data)[23]
+  #select_if(is.numeric)
+#colnames(data)[24] <- "Result"
+
+set.seed(2023)
+data_rows <- floor(0.8 * nrow(data))
+train_indices <- sample(c(1:nrow(data)), data_rows)
+
+train_data <- data[train_indices, ]
+test_data <- data[-train_indices, ]
+#str(test_data)
+
+# Get the test_label and the test data
+test_label <- test_data[, 26] # Column 26 is target
+test_data <- test_data[, -26]
+#test_data$Result <- '0'
+#View(test_data)
+```
+
+```{r echo = F}
+library(caret)
+library(randomForest)
+library(ROCR)
+
+control <- trainControl(method = "cv", number = 5)
+```
+
+## Budowa modeli
+
+Ponieżej będą przedstawione jedynie wyniki działania modeli na zbiorze testowym, bez uwzględniania ich szczegółowej specyfikacji.
+
+### Model R-part
+
+Jest to algorytm drzewa decyzyjnego, który pozwala na budowanie modeli prognozujących na podstawie zestawu danych.
+
+Główną ideą modelu rpart jest podział zbioru danych na coraz mniejsze podzbiory na podstawie wybranych zmiennych, aż do momentu, gdy osiągnie się jednorodność wewnątrz podzbiorów. Proces ten prowadzi do utworzenia drzewa decyzyjnego, w którym wierzchołki reprezentują decyzje, a liście zawierają prognozy.
+
+```{r echo = F}
+mod.rpart <- train(Result~., data = train_data, method = "rpart", trControl = control)
+# mod.rpart
+# 
+# modelsummary::modelsummary(mod.rpart)
+#summary(mod.rpart$finalModel)
+```
+
+```{r echo = F}
+pred.rpart <- predict(mod.rpart, test_data, type = "prob")
+pred.rpart.class <- predict(mod.rpart, test_data)
+
+x.rpart <- confusionMatrix(pred.rpart.class, test_label, positive = "Win")
+
+kbl(x.rpart$overall[1], col.names = NULL) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+kbl(x.rpart$table) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+```
+
+### Model $k$NN
+
+$k$-Nearest Neighbors (kNN) to technika uczenia maszynowego stosowana zarówno w problemach klasyfikacji, jak i regresji. Algorytm opiera się na idei, że podobne dane powinny być blisko siebie w przestrzeni cech, jeśli obiekty mają podobne cechy, to są one też podobne pod względem etykiety klasy (w przypadku klasyfikacji) lub wartości docelowej (w przypadku regresji).
+
+```{r echo = F}
+mod.knn <- train(Result~., data = train_data, method = "knn", trControl = control)
+#mod.knn
+
+#summary(mod.knn$finalModel)
+```
+
+```{r echo = F}
+pred.knn <- predict(mod.knn, newdata = test_data, type = "prob")
+pred.class.knn <- predict(mod.knn, newdata = test_data)
+
+x.knn <- confusionMatrix(pred.class.knn, test_label, positive = "Win")
+kbl(x.knn$overall[1], col.names = NULL) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+kbl(x.knn$table) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+```
+
+### NB - Naive Bayes
+
+Algorytm Naiwnego Bayesa to algorytm uczenia maszynowego wykorzystywany do problemów klasyfikacji. Opiera się na zastosowaniu twierdzenia Bayesa do obliczenia prawdopodobieństwa przynależności do danej klasy. Mając zestaw cech $x_1, x_2, ..., x_n$ oraz zadaną klasę $y$, model Naiwnego Bayesa oblicza prawdopodobieństwo warunkowe $P(y|x_1, x_2, .., x_n)$ dla każdej możliwej klasy. Następnie przypisuje nowy punkt danych do klasy, która ma najwyższe prawdopodobieństwo warunkowe.
+
+Należy jednak zaznaczyć iż algorytm Bayes'a nie uwzględnia złożonych zależności między cechami. Wieć założenie o niezależności cech może być niewłaściwe w niektórych przypadkach, co może prowadzić do niedokładnych prognoz.
+
+```{r echo = F}
+mod.nb <- train(Result~., data = train_data, method = "nb", trControl = control)
+#mod.nb
+```
+
+```{r echo = F}
+# mod.nb <- e1071::naiveBayes(Result~., data = train_data, laplace = 1, type = c("class"))
+# mod.nb
+
+pred.nb <- predict(mod.nb, newdata = test_data, type = "prob")
+pred.class.nb <- predict(mod.nb, newdata = test_data)
+
+x.nb <- confusionMatrix(pred.class.nb, test_label, positive = "Win")
+kbl(x.nb$overall[1], col.names = NULL) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+kbl(x.nb$table) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+```
+
+### RF - Random Forest
+
+Model Random Forest jest ważną częścią uczenia maszynowego. Wykorzystuje on zasadę łączenia wielu słabszych modeli w celu stworzenia silnego modelu. Las losowy jest zbudowany z wielu drzew decyzyjnych, które działają niezależnie i tworzą głosowanie większościowe w celu dokonania predykcji.
+
+Podstawową ideą jest stworzenie losowych podzbiorów danych uczących (bootstrapping) oraz losowego wyboru cech dla każdego drzewa w lesie. Każde drzewo jest trenowane na jednym z tych podzbiorów, tzn. każde drzewo jest trenowane na innym zestawie cech. Dzięki temu, każde drzewo w lesie jest nieco inne, co prowadzi do różnorodności modelu.
+
+```{r echo = F}
+#mod.rf <- train(Result~., data = train_data, method = "rf", trControl = control)
+#mod.rf
+#saveRDS(mod.rf, "model_rf.rds")
+mod.rf <- readRDS("C:\\Users\\annak\\OneDrive\\Dokumenty\\model_rf.rds")
+#summary(mod.rf$finalModel)
+```
+
+```{r echo = F}
+pred.rf <- predict(mod.rf, newdata = test_data, type = "prob")
+pred.class.rf <- predict(mod.rf, newdata = test_data)
+
+x.rf <- confusionMatrix(pred.class.rf, test_label, positive = "Win")
+kbl(x.rf$overall[1], col.names = NULL) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+kbl(x.rf$table) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+```
+
+### SVM - Support Vector Machines
+
+Jest to technika uczenia maszynowego, która znajduje zastosowanie zarówno w problemach klasyfikacji, jak i regresji. Model ten jest oparty na matematycznych podstawach i teorii separacji danych za pomocą hiperpłaszczyzn.
+
+Główną ideą modelu SVM jest znalezienie optymalnej hiperpłaszczyzny, która rozdziela dane należące do różnych klas w sposób jak najbardziej efektywny. Hiperpłaszczyzna jest wielowymiarową odpowiednikiem linii w przypadku klasyfikacji binarnej lub hiperpowierzchni w przypadku klasyfikacji wieloklasowej.
+
+```{r echo = F}
+#mod.svm <- train(Result~., data = train_data, method = "svmLinear", trControl = control)
+#mod.svm
+#saveRDS(mod.svm, "model_svm.rds")
+mod.svm <- readRDS("C:\\Users\\annak\\OneDrive\\Dokumenty\\model_svm.rds")
+#summary(mod.svm$finalModel)
+```
+
+```{r echo = F}
+pred.svm <- predict(mod.svm, newdata = test_data, type = "prob")
+pred.class.svm <- predict(mod.svm, newdata = test_data)
+
+x.svm <- confusionMatrix(pred.class.svm, test_label, positive = "Win")
+kbl(x.svm$overall[1], col.names = NULL) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+kbl(x.svm$table) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+```
+
+### XGBoost - eXtreme Gradient Boosting
+
+Model XGBoost jest algorytmem uczenia maszynowego, który wykorzystuje zasadę łączenia wielu słabszych modeli w celu stworzenia silnego modelu.
+
+Jest on oparty na algorytmie `gradient boosting`, który polega na iteracyjnym trenowaniu modeli w celu minimalizacji funkcji straty poprzez dodawanie nowych modeli, które korygują błędy poprzednich modeli. Algorytm szuka optymalnych wag dla każdego modelu, minimalizując gradient funkcji straty oraz stosuje regularyzację, aby uniknąć przeuczenia.
+
+```{r include=FALSE}
+# mod.xgboost <- train(Result~., data = train_data, method = "xgbDART", trControl = control)
+# mod.xgboost
+
+#saveRDS(mod.xgboost, "model_xgboost.rds")
+mod.xgboost <- readRDS("C:\\Users\\annak\\OneDrive\\Dokumenty\\model_xgboost.rds")
+
+#summary(mod.xgboost$finalModel)
+
+pred.xgboost <- predict(mod.xgboost, newdata = test_data, type = "prob")
+pred.class.xgboost <- predict(mod.xgboost, newdata = test_data)
+
+x.xgboost <- confusionMatrix(pred.class.xgboost, test_label, positive = "Win")
+```
+
+```{r echo = F}
+
+kbl(x.xgboost$overall[1], col.names = NULL) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+kbl(x.xgboost$table) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+```
+
+### GBM - Gradient Boosting Machine
+
+Jest to technika uczenia maszynowego, która wykorzystuje zasadę łączenia wielu słabszych modeli w celu stworzenia silnego modelu prognozującego.
+
+Podstawową ideą modelu jest iteracyjne trenowanie prostych modeli, w celu minimalizacji funkcji straty. Każdy kolejny model jest trenowany w celu skorygowania błędów popełnionych przez poprzednie modele.
+
+W przeciwieństwie do modelu Random Forest, gdzie drzewa są budowane niezależnie, w modelu GBM drzewa są budowane sekwencyjnie. Każde drzewo jest dodawane w taki sposób, aby minimalizować wartość funkcji straty, która wynika z poprzednich drzew. Każde drzewo ma za zadanie poprawić predykcję na podstawie informacji, które poprzednie drzewa nie uwzględniły.
+
+```{r include=FALSE}
+#mod.gbm <- train(Result~., data = train_data, method = "gbm", trControl = control)
+#mod.gbm
+#saveRDS(mod.gbm, "model_gbm.rds")
+mod.gbm <- readRDS("C:\\Users\\annak\\OneDrive\\Dokumenty\\model_gbm.rds")
+#summary(mod.gbm$finalModel)
+
+pred.gbm <- predict(mod.gbm, newdata = test_data, type = "prob")
+pred.class.gbm <- predict(mod.gbm, newdata = test_data)
+
+x.gbm <- confusionMatrix(pred.class.gbm, test_label, positive = "Win")
+```
+
+```{r echo = F}
+
+kbl(x.gbm$overall[1], col.names = NULL) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+kbl(x.gbm$table) |> 
+  column_spec(1, bold = TRUE) |> 
+  kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F, 
+        position = "center"
+        )
+```
+
+# Porównanie wyników
+
+Poniżej widzimy wyniki porównania różnych modeli w kontekście ich skuteczności na wykresach.
+
+```{r echo = F}
+results <- resamples(list(RPART = mod.rpart, KNN = mod.knn, NB = mod.nb, RF = mod.rf, SVM = mod.svm, XGBOOST = mod.xgboost, GBM = mod.gbm))
+#NB = mod.nb,
+#summary(results)
+bwplot(results,
+       layout = c(1, 2))
+
+test1 <- prediction(pred.rpart[, 2], test_label)
+test2 <- prediction(pred.rf[, 2], test_label)
+test3 <- prediction(pred.xgboost[, 2], test_label)
+test4 <- prediction(pred.gbm[, 2], test_label)
+test5 <- prediction(pred.knn[, 2], test_label)
+test6 <- prediction(pred.nb[, 2], test_label)
+
+perf1 <- performance(test1, "tpr", "fpr")
+perf2 <- performance(test2, "tpr", "fpr")
+perf3 <- performance(test3, "tpr", "fpr")
+perf4 <- performance(test4, "tpr", "fpr")
+perf5 <- performance(test5, "tpr", "fpr")
+perf6 <- performance(test6, "tpr", "fpr")
+
+plot(perf1, col = "blue")
+plot(perf2, add = T, col = "green")
+plot(perf3, add = T, col = "red")
+plot(perf4, add = T, col = "orange")
+plot(perf5, add = T, col = "black")
+plot(perf6, add = T, col = "yellow")
+
+legend("topright", legend = c("RPART", "RF", "XGBOOST", "GBM", "KNN", "NB"), col = c("blue", "green", "red", "orange", "black", "yellow"), lwd = 3, cex = 0.6) 
+```
+
+I tabelka podsumowująca ich ranking.
+
+```{r echo = F}
+auc.rpart <- performance(test1, "auc")
+aucrpart <- as.data.frame(auc.rpart@y.values[1])
+
+auc.rf <- performance(test2, "auc")
+aucrf <- as.data.frame(auc.rf@y.values[1])
+
+auc.xgboost <- performance(test3, "auc")
+aucxgboost <- as.data.frame(auc.xgboost@y.values[1])
+
+auc.gbm <- performance(test4, "auc")
+aucgbm <- as.data.frame(auc.gbm@y.values[1])
+
+auc.knn <- performance(test5, "auc")
+aucknn <- as.data.frame(auc.knn@y.values[1])
+
+auc.nb <- performance(test6, "auc")
+aucnb <- as.data.frame(auc.nb@y.values[1])
+
+library(kableExtra)
+
+tab <- data.frame(Accuracy = c(x.rpart$overall[1], x.rf$overall[1], x.xgboost$overall[1], x.gbm$overall[1], x.knn$overall[1], x.nb$overall[1]))
+
+tabelka <- data.frame(Model = c("RPart", "Random Forest", "XGBoost", "GBM", "KNN", "Naive Bayes"), 
+                      AUC = c(aucrpart[1, 1], aucrf[1, 1], aucxgboost[1, 1], aucgbm[1, 1], aucknn[1, 1], aucnb[1, 1])) 
+
+tabelka <- cbind(tabelka, tab)
+tabelka <- tabelka[order(tabelka$Accuracy, decreasing = T),]
+
+kbl(tabelka, digits = 5, row.names = F) |> 
+  kable_styling(bootstrap_options = c("striped", "hover")) |> 
+  column_spec(1, bold = T)
+```
+
+```{r eval=FALSE, include=FALSE}
+
+# pred.class.rf <- predict(mod.rpart, newdata = prediction_df)
+# 
+# prediction_df$Winner2 <- as.character(pred.class.rf)
+# str(test_data)
+# colnames(test_data)[3, 4, 15]
+# for (i in 1:10000) {
+#   if (prediction_df$Winner2[i] == 'Loss') {
+#   prediction_df$Winner[i] <-  prediction_df$First_pokemon[i]
+#   prediction_df$First_pokemon[i]
+#   } else {
+#     prediction_df$Winner[i] <-  prediction_df$Second_pokemon[i]
+#     prediction_df$Second_pokemon[i]
+#   }
+# }
+```
+
+Na podstawie przeprowadzonej analizy możemy stwierdzić iż, na pierwszym miejscu w rankingu znajduje się model XGBoost, który wykazał się najwyższą skutecznością. Kolejnymi w kolejności są modele K-Nearest Neighbors (KNN) oraz Random Forest (RF), które również uzyskały dobre rezultaty. Z kolei, model Naive Bayes (NB) osiągnął najniższe wyniki i został sklasyfikowany jako najmniej skuteczny w porównaniu do pozostałych modeli.
+
+![](images/pokemon2.png){fig-align="center"}
