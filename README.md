@@ -13,12 +13,12 @@ Predict the primary type of a Pokémon based on its image using convolutional ne
 **Language:** R  
 **Tech:** Keras in R, CNN, image preprocessing
 
-### ⚔[2. Battle Outcome Prediction](./ml-methods-comparison-pokemon-battles)  
+### [2. Battle Outcome Prediction](./ml-methods-comparison-pokemon-battles)  
 Compare multiple ML methods to predict the winner of a Pokémon battle based on their stats.  
 **Language:** R  
 **Tech:** Decision Trees, Random Forest, SVM, XGBoost
 
-### 📊 [3. Multimethod Pokémon Data Analysis](./pokemon-statistical-modeling)  
+### [3. Multimethod Pokémon Data Analysis](./pokemon-statistical-modeling)  
 Perform regression, clustering, and classification using different techniques across both Python and R.  
 **Language:** R & Python  
 **Tech:** k-Means, PCA, Linear/Logistic Regression, Decision Trees
